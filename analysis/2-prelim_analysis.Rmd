@@ -1,0 +1,132 @@
+---
+title: "2-prelim_analysis"
+author: "Bernard"
+date: "2021-08-24"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+# Packages
+
+```{r}
+library (tidyverse)
+
+# BN
+library (bnlearn)
+library (Rgraphviz)
+
+# Cluster
+library (cluster)
+library (factoextra)
+```
+
+# Data
+
+```{r}
+dat <- readRDS ("output/df_base.RDS")
+
+#df <- dat$imp
+df <- na.omit (dat$raw)
+```
+
+# Bayesian network
+
+## Create blacklist
+
+```{r}
+
+df.bn <- df
+
+demo.var = grep("age|bmi", colnames (df.bn), value = TRUE)
+others.var = setdiff (names(df.bn), demo.var)
+
+pair_var <- expand.grid(from = names (df.bn),
+                        to = names (df.bn)) %>%
+  rownames_to_column()
+
+tiers_keep <- pair_var %>%
+  filter (!(grepl (paste0(demo.var, collapse = "|"),to))) 
+
+bl <- anti_join(pair_var, tiers_keep, by = "rowname")  %>%
+  filter (from != to) %>%
+  select (-rowname)%>%
+  mutate_all(as.character)
+
+```
+
+## Analysis
+
+```{r}
+n_boot <- 200
+
+set.seed (20200420)
+
+boot <- boot.strength(df.bn,
+                      R = n_boot,
+                      algorithm = "hc",
+                      algorithm.args = list (blacklist = bl))
+```
+
+## Plot
+
+### Set threshold
+
+```{r}
+set_thres <- 0.5 # try 0.5, 0.6, 0.7. 0.8, the higher to one the sparser the model
+
+avg <-  averaged.network(boot, threshold = set_thres)
+fit <-  bn.fit (avg, df.bn, method = "mle")
+
+
+g = strength.plot(avg, 
+                  boot, 
+                  shape = "rectangle",
+                  main = "Figure")
+
+graph::nodeRenderInfo(g) = list(fontsize=20)
+renderGraph(g)
+
+
+```
+
+# Clustering
+
+## Distance measure
+
+```{r}
+dd <- daisy(df,
+            metric = "gower",
+            stand =TRUE)
+fviz_dist(dd)
+```
+
+
+## HC
+
+```{r}
+
+res.hc <- hclust(d = dd, method = "ward.D2")
+
+fviz_dend(res.hc, cex = 0.5)
+
+# Compute cophentic distance
+res.coph <- cophenetic(res.hc)
+# Correlation between cophenetic distance and
+# the original distance
+cor(dd, res.coph)
+
+grp <- cutree(res.hc, k = 4)
+
+table(grp)
+
+pdf("output/cluster.pdf")
+fviz_dend(res.hc, k = 4, # Cut in four groups
+  cex = 0.5, # label size
+  k_colors = c("#2E9FDF", "#00AFBB", "#E7B800", "#FC4E07"),
+  color_labels_by_k = TRUE, # color labels by groups
+  rect = TRUE # Add rectangle around groups
+  )
+dev.off()
+```
+

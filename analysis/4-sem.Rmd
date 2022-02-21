@@ -1,0 +1,577 @@
+---
+title: "4-TTH"
+author: "bernard-liew"
+date: "2021-06-23"
+output: 
+  workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+# Load package
+
+```{r, message=F, warning=F}
+
+rm (list = ls())
+# Helper
+library (tidyverse)
+library (skimr)
+library (cowplot)
+library (ggpubr)
+library (flextable)
+library (officer)
+library (arsenal)
+library (rstatix)
+library (kableExtra)
+
+# BN
+library (bnlearn)
+library (Rgraphviz)
+
+#SEM
+library (lavaan)
+library (semPlot)
+library (semptools)
+
+# Cluster 
+library (cluster)
+library (factoextra)
+library (fastcluster)
+```
+
+# Load data
+
+This is an imputed dataset
+
+```{r}
+
+df <- mice::complete (readRDS("output/df_base.RDS")$imp) %>%
+  select (-c(trajec, bmi, sbt)) %>%
+  mutate (sex = factor (sex))%>%
+  mutate_at (vars(fitness:freedom), as.numeric)
+```
+
+## Preview data
+
+```{r}
+skim (df)
+```
+
+```{r}
+df %>%
+  kable () %>%
+    kable_styling() %>%
+    scroll_box(width = "700px", height = "500px")
+```
+
+
+
+# Cluster analysis
+
+Performs cluster analysis using Gower's distance and `ward.D2` linkage.
+
+```{r}
+dd <- daisy(df, metric="gower")
+
+res.hc <- fastcluster::hclust(d = dd, method = "ward.D2")
+plot (res.hc)
+```
+
+## Select optimal clusters
+
+Selected two from visual inspection, and collapsed two variables `flex_mob` and `duration` into binary variables.
+
+```{r}
+
+grp <- cutree(res.hc, k = 2)
+
+
+df_grp <- df %>%
+  mutate (grp = factor (grp)) %>%
+  mutate (flex_mob = fct_collapse(flex_mob,
+                                  "0" = c("0","1", "2"),
+                                  "1" = c("3", "4"))) %>%
+  mutate (duration = fct_collapse(duration,
+                                  "0" = c("1","2", "3"),
+                                  "1" = c("4", "5")))
+
+tab1 <- tableby(grp ~ ., data=df_grp)
+summary (tab1, text=TRUE)
+```
+
+
+# Preprocess
+
+Scale numeric variables to mean -0 and SD - 1
+
+```{r}
+df_sem <- df_grp %>%
+  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
+  mutate_if(is.factor, as.numeric)
+
+```
+
+
+# CFA
+
+Test latent model
+
+```{r}
+cfa_form0 <- "
+  # latent
+  physical =~ flex_mob + abds_ms + ext_ms
+  pain =~ lbp + legp + duration
+  psych =~ ipq + fabq + ases
+  funx =~ fitness + endure + balance 
+  
+"
+
+
+m0 <- cfa (cfa_form0, 
+           data = df_sem,
+           ordered = c("flex_mob", "duration"))
+
+fitMeasures(m0, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+```
+
+## Plot
+
+```{r}
+semPaths (m0, 
+          what = "paths",
+          whatLabels = "est",
+          nCharNodes = 0,
+          layout = "tree",
+          label.cex = 1.5,
+          sizeMan = 6,
+          intercepts = FALSE)
+```
+
+# SEM analysis
+
+Form three datasets.
+
+`df_sem1` = cluster 1
+`df_sem2` = cluster 2
+`df_sem`  = whole group data
+
+```{r}
+df_sem1 <- df_grp %>%
+  filter (grp ==1) %>%
+  select (-grp) %>%
+  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
+  mutate_if(is.factor, as.numeric)
+  
+
+df_sem2 <- df_grp %>%
+  filter (grp ==2) %>%
+  select (-grp) %>%
+  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
+  mutate_if(is.factor, as.numeric)
+
+```
+
+
+## Bayesian networks
+
+Creates 3 datasets for bayesian networks. Need to initialize latent variables and treat them as missing data for structural learning.
+
+```{r}
+
+df.bn <- as.data.frame (df_sem) %>%
+  select (-grp) %>%
+  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
+  mutate (pain = as.numeric (NA),
+          psych = as.numeric(NA),
+          funx = as.numeric (NA),
+          phys = as.numeric(NA))%>%
+  mutate_if (is.factor, as.numeric)%>%
+  select (-c(strn, flexible, freedom, sex, odi))
+
+df.bn1 <- as.data.frame (df_sem1) %>%
+  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
+  mutate (pain = as.numeric (NA),
+          psych = as.numeric(NA),
+          funx = as.numeric (NA),
+          phys = as.numeric(NA))%>%
+  mutate_if (is.factor, as.numeric)%>%
+  select (-c(strn, flexible, freedom, sex, odi))
+
+df.bn2 <- as.data.frame (df_sem2) %>%
+  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
+  mutate (pain = as.numeric (NA),
+          psych = as.numeric(NA),
+          funx = as.numeric (NA),
+          phys = as.numeric(NA))%>%
+  mutate_if (is.factor, as.numeric)%>%
+  select (-c(strn, flexible, freedom, sex, odi))
+
+```
+
+
+### Create blacklist and whitelist
+
+Whitelist are from the latent to manifest variables
+Blacklist are that manifest variables can only point from their respective latent variables.
+
+```{r}
+
+demo.var = grep("age|grp", colnames (df.bn1), value = TRUE)
+pain.var = grep("duration|legp|lbp", colnames (df.bn1), value = TRUE)
+psych.var = grep("ases|fabq|ipq", colnames (df.bn1), value = TRUE)
+phys.var = grep("ext|abds|flex_", colnames (df.bn1), value = TRUE)
+fx.var = grep("fitness|endure|balance", colnames (df.bn1), value = TRUE)
+others.var = setdiff (names(df.bn1), c(demo.var, pain.var, psych.var, phys.var, fx.var))
+
+pair_var <- expand.grid(from = names (df.bn1),
+                        to = names (df.bn1)) %>%
+  rownames_to_column()
+
+tiers_keep <- pair_var %>%
+  filter (!(grepl (paste0(c(pain.var, psych.var, phys.var, fx.var, demo.var), collapse = "|"),to))) %>%
+  filter (!(grepl (paste0(c(pain.var, psych.var, phys.var, fx.var), collapse = "|"),from))) 
+
+  
+bl <- anti_join(pair_var, tiers_keep, by = "rowname")  %>%
+  filter (from != to) %>%
+  select (-rowname) %>%
+  mutate_all(as.character) %>% 
+  filter (from !="grp") %>% 
+  filter (to !="grp") 
+
+latent1 <- expand.grid(from = "pain",
+                        to = pain.var)
+latent2 <- expand.grid(from = "psych",
+                        to = psych.var)
+latent3 <- expand.grid(from = "phys",
+                        to = phys.var)
+latent4 <- expand.grid(from = "funx",
+                        to = fx.var)
+wl <- latent1 %>%
+  bind_rows(latent2) %>%
+  bind_rows(latent3)%>%
+  bind_rows(latent4)%>%
+  mutate_all (as.character)
+
+
+```
+
+### Structural learning
+
+```{r, eval= FALSE}
+
+####################### Full dataset ####################### ##################
+
+start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn)), df.bn)
+start$pain = list(coef = 0, sd = 1)
+start$phys = list(coef = 0, sd = 1)
+start$psych = list(coef = 0, sd = 1)
+start$funx = list(coef = 0, sd = 1)
+
+m0 <- bnlearn::structural.em(df.bn, 
+                       start = start,
+                       maximize = "hc",
+                       maximize.args = list(blacklist = bl,
+                                            whitelist = wl))
+
+
+####################### subgroup 1 ####################### ##################
+start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn1)), df.bn1)
+start$pain = list(coef = 0, sd = 1)
+start$phys = list(coef = 0, sd = 1)
+start$psych = list(coef = 0, sd = 1)
+start$funx = list(coef = 0, sd = 1)
+
+m1 <- bnlearn::structural.em(df.bn1, 
+                       start = start,
+                       maximize = "hc",
+                       maximize.args = list(blacklist = bl,
+                                            whitelist = wl))
+
+
+
+####################### subgroup 2 ####################### ##################
+start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn2)), df.bn2)
+start$pain = list(coef = 0, sd = 1)
+start$phys = list(coef = 0, sd = 1)
+start$psych = list(coef = 0, sd = 1)
+start$funx = list(coef = 0, sd = 1)
+
+m2 <- bnlearn::structural.em(df.bn2, 
+                       start = start,
+                       maximize = "hc",
+                       maximize.args = list(blacklist = bl,
+                                            whitelist = wl))
+
+## Plot
+
+par (mfrow = c(2,2), mar = c(1, 1, 1, 1))
+plot (m0)
+plot (m1)
+plot (m2)
+
+```
+
+
+```{r, eval= FALSE}
+doParallel::registerDoParallel(7)
+n_boot = 10
+############
+boot1  =  foreach (B = 1: n_boot) %dopar%{
+  set.seed (426)
+    boot.sample = df.bn1[sample(nrow(df.bn1)), ]
+    
+    start = bnlearn::bn.fit(bnlearn::empty.graph(names(boot.sample)), boot.sample)
+    start$pain = list(coef = 0, sd = 1)
+    start$phys = list(coef = 0, sd = 1)
+    start$psych = list(coef = 0, sd = 1)
+    start$funx = list(coef = 0, sd = 1)
+    bnlearn::structural.em(boot.sample, 
+                           start = start,
+                           maximize = "hc",
+                           maximize.args = list(blacklist = bl,
+                                                whitelist = wl))
+}
+#############\\\\\\\\\\\\\\\\\\\\\\
+doParallel::stopImplicitCluster()  
+
+
+doParallel::registerDoParallel(7)
+############
+boot2  =  foreach (B = 1: n_boot) %dopar%{
+  set.seed (426)
+    boot.sample = df.bn2[sample(nrow(df.bn2)), ]
+    
+    start = bnlearn::bn.fit(bnlearn::empty.graph(names(boot.sample)), boot.sample)
+    start$pain = list(coef = 0, sd = 1)
+    start$phys = list(coef = 0, sd = 1)
+    start$psych = list(coef = 0, sd = 1)
+    start$funx = list(coef = 0, sd = 1)
+    
+    bnlearn::structural.em(boot.sample, 
+                           start = start,
+                           maximize = "hc",
+                           maximize.args = list(blacklist = bl,
+                                                whitelist = wl))
+}
+#############
+doParallel::stopImplicitCluster()  
+
+
+doParallel::registerDoParallel(7)
+############
+boot3  =  foreach (B = 1: n_boot) %dopar%{
+  set.seed (450)
+    boot.sample = df.bn3[sample(nrow(df.bn3)), ]
+    
+    start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn2)), df.bn2)
+    start$pain = list(coef = 0, sd = 1)
+    start$phys = list(coef = 0, sd = 1)
+    start$psych = list(coef = 0, sd = 1)
+    start$funx = list(coef = 0, sd = 1)
+    
+    bnlearn::structural.em(boot.sample, 
+                           start = start,
+                           maximize = "hc",
+                           maximize.args = list(blacklist = bl,
+                                                whitelist = wl))
+}
+#############
+doParallel::stopImplicitCluster()  
+
+bootstr1 <-  custom.strength(boot1, nodes = names(df.bn1))
+avg1 <-  averaged.network(bootstr1, threshold = 0.5)
+
+
+bootstr2 <-  custom.strength(boot2, nodes = names(df.bn2))
+avg2 <-  averaged.network(bootstr2, threshold = 0.7)
+
+
+bootstr3 <-  custom.strength(boot3, nodes = names(df.bn3))
+avg3 <-  averaged.network(bootstr3, threshold = 0.5)
+
+g1 <- strength.plot(avg1, bootstr1)
+graph::nodeRenderInfo(g1) <- list(fontsize=30)
+Rgraphviz::renderGraph(g1)
+
+g2 <- strength.plot(avg2, bootstr2)
+graph::nodeRenderInfo(g2) <- list(fontsize=30)
+Rgraphviz::renderGraph(g2)
+
+g3 <- strength.plot(avg3, bootstr3)
+graph::nodeRenderInfo(g3) <- list(fontsize=30)
+Rgraphviz::renderGraph(g3)
+
+par(mfrow = c(2, 2), mar=c(1,1,1,1))
+Rgraphviz::renderGraph(g1)
+Rgraphviz::renderGraph(g2)
+Rgraphviz::renderGraph(g3)
+```
+#### Get averaged model
+
+```{r, eval= FALSE}
+bootstr <-  custom.strength(boot, nodes = names(df.bn))
+avg <-  averaged.network(bootstr, threshold = 0.5)
+fit <-  bn.fit (avg, df.bn, method = "mle")
+strength.plot(avg, bootstr)
+```
+
+
+## BN to SEM 
+
+### Method 1
+
+```{r}
+sem_form0 <- "
+  # latent
+  physical =~ flex_mob + abds_ms + ext_ms
+  pain =~ lbp + legp + duration
+  psych =~ ipq + fabq + ases
+  funx =~ fitness + endure + balance 
+  
+  funx ~ age + psych
+  psych ~ pain
+  physical ~ funx + psych
+
+"
+
+m0 <- lavaan::sem (sem_form0,  data = df_sem, ordered = c("flex_mob", "duration"))
+summary (m0)
+
+
+semPaths (m0, 
+          what = "path", 
+          layout = "tree3", 
+          curvePivot = TRUE, 
+          residuals = FALSE,
+          intercept = TRUE,
+          fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
+          rotation = 2,
+          curve = TRUE,
+          freeStyle = c("black", 1))
+
+fitMeasures(m0, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+```
+
+```{r}
+sem_form1 <- "
+  # latent
+  physical =~ flex_mob + abds_ms + ext_ms
+  pain =~ lbp + legp + duration
+  psych =~ ipq + fabq + ases
+  funx =~ fitness + endure + balance 
+  
+  physical ~ age
+  funx ~ physical + psych
+  psych ~ physical
+  pain ~ funx
+"
+
+m1 <- lavaan::sem (sem_form1,  data = df_sem1, ordered = c("flex_mob", "duration"))
+summary (m1)
+
+semPaths (m1, 
+          what = "path", 
+          layout = "tree3", 
+          curvePivot = TRUE, 
+          residuals = FALSE,
+          intercept = TRUE,
+          fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
+          rotation = 2,
+          curve = TRUE,
+          freeStyle = c("black", 1))
+
+fitMeasures(m1, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+```
+
+
+```{r}
+sem_form2 <- "
+  # latent
+  physical =~ flex_mob + abds_ms + ext_ms
+  pain =~ lbp + legp + duration
+  psych =~ ipq + fabq + ases
+  funx =~ fitness + endure + balance 
+  
+  physical ~ age + psych + funx
+  psych ~ pain
+  funx ~ psych
+
+"
+
+m2 <- lavaan::sem (sem_form2,  data = df_sem2, ordered = c("flex_mob", "duration"))
+summary (m2)
+
+semPaths (m2, 
+          what = "path", 
+          layout = "tree3", 
+          curvePivot = TRUE, 
+          residuals = FALSE,
+          intercept = TRUE,
+          fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
+          rotation = 2,
+          curve = TRUE,
+          freeStyle = c("black", 1))
+
+fitMeasures(m2, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+```
+
+
+
+```{r}
+sem_form2 <- "
+  # latent
+  physical =~ flex_mob + abds_ms + ext_ms
+  pain =~ lbp + legp + duration
+  psych =~ ipq + fabq + ases
+  funx =~ fitness + endure + balance 
+  
+  physical ~ age + psych + funx
+  psych ~ pain
+  funx ~ psych
+
+"
+
+m2 <- lavaan::sem (sem_form2,  data = df_sem2, ordered = c("flex_mob", "duration"))
+summary (m2)
+
+semPaths (m2, 
+          what = "path", 
+          layout = "tree3", 
+          curvePivot = TRUE, 
+          residuals = FALSE,
+          intercept = TRUE,
+          fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
+          rotation = 2,
+          curve = TRUE,
+          freeStyle = c("black", 1))
+
+fitMeasures(m2, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+```
+
+
+
+
+```{r}
+
+m3 <- lavaan::sem (sem_form2,  data = df_sem1, ordered = c("flex_mob", "duration"))
+fitMeasures(m3, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+```
+
+
+# Save data
+
+```{r}
+res <- list (m0 = m0,
+             m1 = m1,
+             m1_2 = m1_2,
+             m3 = m3,
+             m3_2 = m3_2,
+             df = df,
+             df3 = df3,
+             boot = boot)
+
+saveRDS (res,
+         "output/res.RDS")
+```
+

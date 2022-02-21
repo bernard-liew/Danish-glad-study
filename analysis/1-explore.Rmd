@@ -1,0 +1,312 @@
+---
+title: "1-explore"
+author: "bernard-liew"
+date: "2021-03-29"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+# Package
+
+```{r}
+# Helper
+library (tidyverse)
+library (skimr)
+library (DataExplorer)
+library (janitor)
+library (rsample)
+
+# Import
+library (rio)
+
+# Missing
+library (VIM)
+library (naniar)
+library (mice)
+library (NADIA)
+```
+
+# Import
+
+```{r}
+df <- import ("data/2021-6, Workfile_210602.xls")
+```
+
+# Explore data
+
+```{r}
+skim (df)
+
+```
+
+# Get baseline data
+
+```{r}
+df_base <- df %>%
+  select (!matches("_p3|_p6|_p12|3m|6m|12m|cfu"))
+```
+
+## Select desired variables
+
+```{r}
+vars_inc <- c("test_flex_c0",
+              "test_abd_c0",
+              "test_ext_c0",
+              "gender_p0", 
+              "age_p0",
+              "bmi_p0",
+              "backpain_p0",
+              "legpain_p0",
+              "epidur_p0",
+              "trajec_p0",
+              "sbt_risk",
+              "ipqsum_p0",
+              "fabqpa_p0",
+              "odisum_p0",
+              "asespainscore_p0",
+              "physkon_p0",
+              "physsty_p0",
+              "physudh_p0",
+              "physbev_p0",
+              "physbal_p0",
+              "physfri_p0" 
+              )
+
+new_names <- c("flex_mob",
+               "abds_ms",
+               "ext_ms",
+               "sex",
+               "age",
+               "bmi",
+               "lbp",
+               "legp",
+               "duration",
+               "trajec",
+               "sbt",
+               "ipq",
+               "fabq",
+               "odi",
+               "ases",
+              "fitness",
+              "strn",
+              "endure",
+              "flexible",
+              "balance",
+              "freedom" )
+
+df_base <- df_base %>%
+  select (all_of (vars_inc))
+
+names (df_base) <- new_names
+```
+
+## Explore and tidy baseline data
+
+```{r}
+skim (df_base)
+
+df_base %>%
+  map (n_distinct)
+
+df_base <- df_base %>%
+  mutate (flex_mob = factor (flex_mob),
+          duration = factor (duration),
+          trajec = factor (trajec),
+          sbt = factor (sbt)) %>%
+  mutate_at (vars(fitness:freedom), factor)
+
+df_base %>%
+  map_if (is.factor, table)
+```
+
+## Impute missing
+
+```{r}
+df_base_imp <-mice (df_base, m = 5, maxit = 30, method = "rf")
+
+#df_base_imp <- complete (df_base_imp)
+
+df_com <- list (raw = df_base,
+                imp = df_base_imp)
+```
+
+
+## Save 
+
+```{r}
+saveRDS(df_com ,
+        "output/df_base.RDS")
+```
+
+
+# Tidy
+
+## Split into chunks
+
+```{r}
+id <- df[, grepl ("_id", names (df))]
+demo <- df %>%
+  select (case_id, gender_p0, age_p0, bmi_p0, edu_p0, jobsitcor_p0, matches ("work"))
+phys <- df[, grepl ("test_|case_id", names (df))]
+pain <- df[, grepl ("pain_|case_id", names (df))]
+illp <- df[, grepl ("ipqsum|case_id", names (df))]
+fear <- df[, grepl ("fabq|case_id", names (df))]
+sbt <- df[, grepl ("sbt|case_id", names (df))] 
+odi <- df[, grepl ("odi|case_id", names (df))] 
+ses <- df[, grepl ("ases|case_id", names (df))] 
+```
+
+## Calculate change
+
+### Physical variables
+
+```{r}
+phys1 <- phys %>%
+  pivot_longer(-case_id,
+                 names_to = c("test", "time"),
+                names_pattern = "test_?(.*)_(.*)",
+                values_to = "val") %>%
+  pivot_wider(names_from = "time",
+              values_from = "val") %>%
+  mutate(diff_cfu = cfu - c0) %>%
+  select (-c(cfu, c0)) %>%
+  pivot_wider(names_from = "test",
+              values_from = "diff_cfu")
+
+names(phys1) <- c("id", "dflex", "dabd", "dext", "dsts")
+
+```
+
+### Physical variables
+
+```{r}
+pain1 <- pain %>%
+  pivot_longer(-case_id,
+                 names_to = c("test", "time"),
+                names_pattern = "(.*)_(.*)",
+                values_to = "val") %>%
+  pivot_wider(names_from = "time",
+              values_from = "val") %>%
+  mutate(d1 = p3 - p0,
+         d2 = p6 - p3,
+         d3 = p12 - p6) %>%
+  select (-c(p0:p12)) %>%
+  pivot_wider(names_from = "test",
+              values_from = starts_with ("d"))
+
+names(pain1) <- c("id", "d1_lbp", "d1_lp", "d2_lbp", "d2_lp", "d3_lbp", "d3_lp")
+```
+
+### IPQ variables
+
+```{r}
+illp1 <- illp %>%
+  pivot_longer(-case_id,
+                 names_to = c("test", "time"),
+                names_pattern = "(.*)_(.*)",
+                values_to = "val") %>%
+  pivot_wider(names_from = "time",
+              values_from = "val") %>%
+  mutate(diff1 = p3 - p0,
+         diff2 = p6 - p3,
+         diff3 = p12 - p6) %>%
+  select (-c(p0:p12)) %>%
+  pivot_wider(names_from = "test",
+              values_from = matches ("diff"))
+
+names(illp1) <- c("id", "d1_percep","d2_percep", "d3_percep")
+```
+
+### Fear variables
+
+```{r}
+fear1 <- fear %>%
+  pivot_longer(-case_id,
+                 names_to = c("test", "time"),
+                names_pattern = "(.*)_(.*)",
+                values_to = "val") %>%
+  pivot_wider(names_from = "time",
+              values_from = "val") %>%
+  mutate(diff1 = p3 - p0,
+         diff2 = p6 - p3,
+         diff3 = p12 - p6) %>%
+  select (-c(p0:p12)) %>%
+  pivot_wider(names_from = "test",
+              values_from = matches ("diff"))
+
+names(fear1) <- c("id", "d1_fear","d2_fear", "d3_fear")
+```
+
+### ODI variables
+
+```{r}
+odi1 <- odi %>%
+  pivot_longer(-case_id,
+                 names_to = c("test", "time"),
+                names_pattern = "(.*)_(.*)",
+                values_to = "val") %>%
+  pivot_wider(names_from = "time",
+              values_from = "val") %>%
+  mutate(diff1 = p3 - p0,
+         diff2 = p6 - p3,
+         diff3 = p12 - p6) %>%
+  select (-c(p0:p12)) %>%
+  pivot_wider(names_from = "test",
+              values_from = matches ("diff"))
+
+names(odi1) <- c("id", "d1_odi","d2_odi", "d3_odi")
+```
+
+### SES variables
+
+```{r}
+ses1 <- ses %>%
+  pivot_longer(-case_id,
+                 names_to = c("test", "time"),
+                names_pattern = "(.*)_(.*)",
+                values_to = "val") %>%
+  pivot_wider(names_from = "time",
+              values_from = "val") %>%
+  mutate(diff1 = p3 - p0,
+         diff2 = p6 - p3,
+         diff3 = p12 - p6) %>%
+  select (-c(p0:p12)) %>%
+  pivot_wider(names_from = "test",
+              values_from = matches ("diff"))
+
+names(ses1) <- c("id", "d1_sespain","d1_sesother", "d2_sespain","d2_sesother", "d3_sespain","d3_sesother")
+```
+
+## Rename columns
+
+```{r}
+names (id) <- c("id", "record", "clinic")
+names (sbt) <- c("id", "sbt")
+names (demo) <- c("id", "sex", "age", "bmi", "edu", "job", "work_ability_p0",
+                  "work_hours_p0", "work_ability_p3", "work_ability_p6", "work_ability_p12")
+```
+
+# Combine data
+
+```{r}
+df1 <- id %>%
+  inner_join(demo, by = c("id")) %>%
+  inner_join(sbt, by = c("id")) %>%
+  inner_join(pain1, by = c("id")) %>%
+  inner_join(odi1, by = c("id")) %>%
+  inner_join(phys1, by = c("id")) %>%
+  inner_join(fear1, by = c("id")) %>%
+  inner_join(illp1, by = c("id")) %>%
+  inner_join(ses1, by = c("id"))
+
+```
+
+
+## Save 
+
+```{r}
+saveRDS(dat,
+        "output/df.RDS")
+```
+
