@@ -33,11 +33,14 @@ library (Rgraphviz)
 library (lavaan)
 library (semPlot)
 library (semptools)
+library (parameters)
+library (SEMsens)
 
 # Cluster 
 library (cluster)
 library (factoextra)
 library (fastcluster)
+library (clValid)
 ```
 
 ```{r include = FALSE}
@@ -53,10 +56,20 @@ This is an imputed dataset
 
 ```{r, eval = FALSE}
 
-df <- mice::complete (readRDS("output/df_base.RDS")$imp) %>%
-  select (-c(trajec, bmi, sbt)) %>%
-  mutate (sex = factor (sex))%>%
-  mutate_at (vars(fitness:freedom), as.numeric)
+df_base <- readRDS("output/df_base.RDS")
+
+#df_base_imp <-mice (df_base$raw, m = 5, maxit = 30, method = "rf")
+
+df <- mice::complete (df_base$imp) %>%
+  select (-c(strn, flexible, freedom)) %>%
+  mutate (sex = factor (sex, labels = c("0", "1"))) %>%
+  mutate_at (vars(fitness:balance), as.numeric)
+
+df <-df %>%
+  mutate (duration = fct_collapse(duration,
+                                  "0" = c("1","2", "3"),
+                                  "1" = "4",
+                                  "2" = "5"))
 ```
 
 ## Preview data
@@ -76,16 +89,46 @@ df %>%
 
 # Cluster analysis
 
-Performs cluster analysis using Gower's distance and `ward.D2` linkage.
+Performs cluster analysis using Gower's distance and `complete` linkage.
 
 ```{r, eval = FALSE}
 dd <- daisy(df, metric="gower")
 
-res.hc <- fastcluster::hclust(d = dd, method = "ward.D2")
+res.hc <- fastcluster::hclust(d = dd, method = "complete")
 ```
+
+
+## Validate
 
 ```{r}
 plot (res.hc)
+
+dd_mat <- as.matrix(dd)
+intern <- clValid(dd_mat, 2:6, clMethods=c("hierarchical"), method = "complete",
+                   validation="internal")
+```
+
+## Plot
+
+```{r}
+dend <- res.hc %>%
+  as.dendrogram %>%
+  set("branches_k_color", k = 2) %>% set("branches_lwd", 0.7) %>%
+  set("labels_cex", 12) %>% set("labels_colors", k = 2) %>%
+  set("leaves_pch", 19) %>% set("leaves_cex", 0.5) 
+ggd1 <- as.ggdend(dend)
+f <- ggplot(ggd1, horiz = FALSE, labels = FALSE) + 
+  ylab ("Gower's distance")
+
+
+tiff ("manuscript/fig1.tiff", height = 8, width = 12, units = "in", res = 100)
+ggdendro::ggdendrogram(res.hc, 
+                       labels = FALSE, 
+                       leaf_labels = FALSE) + 
+  theme_cowplot() + 
+  xlab ("Observation number") + 
+  ylab ("Gower's distance")
+dev.off ()
 ```
 
 ## Select optimal clusters
@@ -98,18 +141,73 @@ grp <- cutree(res.hc, k = 2)
 
 
 df_grp <- df %>%
-  mutate (grp = factor (grp)) %>%
-  mutate (flex_mob = fct_collapse(flex_mob,
-                                  "0" = c("0","1", "2"),
-                                  "1" = c("3", "4"))) %>%
-  mutate (duration = fct_collapse(duration,
-                                  "0" = c("1","2", "3"),
-                                  "1" = c("4", "5")))
+  mutate (grp = factor (grp)) 
 
 tab1 <- tableby(grp ~ ., data=df_grp)
 summary (tab1, text=TRUE)
 ```
 
+
+# Descriptives
+
+```{r}
+meanNsd_transform <- function (x) {
+  m <- round (as.numeric (x[[1]][1], 2))
+  s <- round (as.numeric (x[[1]][2], 2))
+  m_s <- paste0(m, "(", s, ")")
+  return (m_s)
+}
+
+p_round <- function (x) {
+  m <- round (as.numeric (x[[1]][1], 3))
+  if (m < 0.001) m = "<0.001"
+  return (m)
+}
+tab1 <- tableby (grp ~ ., data=df_grp, digits = 2, digits.p = 2) %>%
+  as.data.frame() %>%
+  filter (!term %in% c("Nmiss", "range")) %>%
+  select (-c(group.term:term, variable.type)) 
+tab2 <-  tab1[-c (6, 8, 13, 15, 17, 23, 25, 27, 29, 31, 33, 35),]
+
+tab2 <- tab2%>% mutate_all(na_if,"")
+tab2$label <- tab1$label[!grepl ("Mean", tab1$label)]
+tab2[,tab2[,2]==""] <- NA
+tab2[,tab2[,3]==""] <- NA
+tab2[,tab2[,5]==""] <- NA
+for(row in 1:nrow(tab2)) {
+    tab2[row, 2] <- meanNsd_transform (tab2[row, 2])
+    tab2[row, 3] <- meanNsd_transform (tab2[row, 3])
+    tab2[row, 4] <- meanNsd_transform (tab2[row, 4])
+    tab2[row, 6] <- p_round (tab2[row, 6])
+  }
+colnames (tab2) <- c ("Variables", 
+                      "Group 1",
+                      "Group 2",
+                      "Total",
+                      "Statistic",
+                      "P value")
+
+tab2$`Group 1` <- unlist(tab2$`Group 1`)
+tab2$`Group 2` <- unlist(tab2$`Group 2`)
+tab2$`Total` <- unlist(tab2$`Total`)
+my_path <- paste0("manuscript/table_1",
+                  ".docx")
+
+ft <- flextable(tab2) %>%
+  set_caption(caption = " Table 1.Baseline descriptive characteristics of cohort") %>%
+  autofit()
+
+my_doc <- read_docx()  %>%
+  body_add_flextable(ft)
+
+print (my_doc, target = my_path)
+```
+
+```{r}
+tab2 %>%
+  kbl() %>%
+  kable_styling()
+```
 
 # Preprocess
 
@@ -117,8 +215,10 @@ Scale numeric variables to mean -0 and SD - 1
 
 ```{r}
 df_sem <- df_grp %>%
+  #select (-c(strn, flexible, freedom)) %>%
   mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
-  mutate_if(is.factor, as.numeric)
+  mutate_if(is.factor, as.numeric)%>%
+  mutate (sex = sex -1)
 
 ```
 
@@ -130,33 +230,70 @@ Test latent model
 ```{r}
 cfa_form0 <- "
   # latent
-  physical =~ flex_mob + abds_ms + ext_ms
+  physical =~ abds_ms + ext_ms + flex_mob 
   pain =~ lbp + legp + duration
   psych =~ ipq + fabq + ases
   funx =~ fitness + endure + balance 
   
+  duration~~legp
+  ipq~~flex_mob
+  lbp~~flex_mob
 "
 
 
-m0 <- cfa (cfa_form0, 
+cfa0 <- lavaan::cfa (cfa_form0, 
            data = df_sem,
-           ordered = c("flex_mob", "duration"))
+           ordered = c("flex_mob", "duration"),
+           std.lv = FALSE, 
+           auto.fix.first = TRUE, 
+           estimator = "WLSMV",
+           se = "robust.sem")
 
-fitMeasures(m0, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+res1 <- residuals(cfa0, type = "cor")$cov %>% 
+  cor_gather() %>%
+  mutate (form = paste0(var1, "~~", var2))  %>%
+  filter (abs(cor) > 0.10) %>%
+  arrange (abs(cor))
+
+fitMeasures(cfa0, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
 ```
 
 ## Plot
 
 ```{r}
-semPaths (m0, 
+ semPaths (cfa0, 
           what = "paths",
           whatLabels = "est",
           nCharNodes = 0,
           layout = "tree",
-          label.cex = 1.5,
+          label.cex = 1.25,
           sizeMan = 6,
+          thresholds = FALSE,
           intercepts = FALSE)
+
+
+
+
 ```
+
+```{r}
+my_label_list <- list(list(node = "funx", to = "activity"))
+f <- semPaths (cfa0, 
+          what = "paths",
+          whatLabels = "est",
+          nCharNodes = 0,
+          layout = "tree",
+          label.cex = 1,
+          sizeMan = 6,
+          residuals = FALSE, 
+          thresholds = FALSE,
+          intercepts = FALSE)
+f2 <- change_node_label(f, my_label_list)
+tiff ("manuscript/fig2.tiff", height = 8, width = 12, units = "in", res = 100)
+plot (f2)
+dev.off ()
+```
+
 
 # SEM analysis
 
@@ -171,14 +308,17 @@ df_sem1 <- df_grp %>%
   filter (grp ==1) %>%
   select (-grp) %>%
   mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
-  mutate_if(is.factor, as.numeric)
+  mutate_if(is.factor, as.numeric) %>%
+  mutate (sex = sex - 1)
   
 
 df_sem2 <- df_grp %>%
   filter (grp ==2) %>%
   select (-grp) %>%
   mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
-  mutate_if(is.factor, as.numeric)
+  mutate_if(is.factor, as.numeric)%>%
+  mutate (sex = sex - 1)
+
 
 ```
 
@@ -189,58 +329,56 @@ Creates 3 datasets for bayesian networks. Need to initialize latent variables an
 
 ```{r, eval = FALSE}
 
+num_vars <- names(df_sem)[! names(df_sem) %in% c("flex_mob", "grp", "duration", "sex")]
+
 df.bn <- as.data.frame (df_sem) %>%
   select (-grp) %>%
-  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
   mutate (pain = as.numeric (NA),
           psych = as.numeric(NA),
           funx = as.numeric (NA),
-          phys = as.numeric(NA))%>%
-  mutate_if (is.factor, as.numeric)%>%
-  select (-c(strn, flexible, freedom, sex, odi))
+          physical = as.numeric(NA))
 
 df.bn1 <- as.data.frame (df_sem1) %>%
-  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
   mutate (pain = as.numeric (NA),
           psych = as.numeric(NA),
           funx = as.numeric (NA),
-          phys = as.numeric(NA))%>%
-  mutate_if (is.factor, as.numeric)%>%
-  select (-c(strn, flexible, freedom, sex, odi))
+          physical = as.numeric(NA))%>%
+  mutate_if (is.factor, as.numeric)
 
 df.bn2 <- as.data.frame (df_sem2) %>%
-  mutate_if(is.numeric, scale, center = TRUE, scale = TRUE) %>%
   mutate (pain = as.numeric (NA),
           psych = as.numeric(NA),
           funx = as.numeric (NA),
-          phys = as.numeric(NA))%>%
-  mutate_if (is.factor, as.numeric)%>%
-  select (-c(strn, flexible, freedom, sex, odi))
+          physical = as.numeric(NA))%>%
+  mutate_if (is.factor, as.numeric)
+
 
 ```
 
 
 ### Create blacklist and whitelist
 
-Whitelist are from the latent to manifest variables
+Whitelist are from the latent to manifest variables.
+
 Blacklist are that manifest variables can only point from their respective latent variables.
 
 ```{r, eval = FALSE}
 
-demo.var = grep("age|grp", colnames (df.bn1), value = TRUE)
-pain.var = grep("duration|legp|lbp", colnames (df.bn1), value = TRUE)
-psych.var = grep("ases|fabq|ipq", colnames (df.bn1), value = TRUE)
-phys.var = grep("ext|abds|flex_", colnames (df.bn1), value = TRUE)
-fx.var = grep("fitness|endure|balance", colnames (df.bn1), value = TRUE)
-others.var = setdiff (names(df.bn1), c(demo.var, pain.var, psych.var, phys.var, fx.var))
+demo.var = grep("age|sex", colnames (df.bn), value = TRUE)
+pain.var = grep("legp|lbp|duration", colnames (df.bn), value = TRUE)
+psych.var = grep("ases|fabq|ipq", colnames (df.bn), value = TRUE)
+phys.var = grep("ext|abds|flex_", colnames (df.bn), value = TRUE)
+fx.var = grep("fitness|endure|balance", colnames (df.bn), value = TRUE)
+outcome.var = grep("odi", colnames (df.bn), value = TRUE)
+others.var = setdiff (names(df.bn), c(demo.var, pain.var, psych.var, phys.var, fx.var, outcome.var))
 
-pair_var <- expand.grid(from = names (df.bn1),
-                        to = names (df.bn1)) %>%
+pair_var <- expand.grid(from = names (df.bn),
+                        to = names (df.bn)) %>%
   rownames_to_column()
 
 tiers_keep <- pair_var %>%
   filter (!(grepl (paste0(c(pain.var, psych.var, phys.var, fx.var, demo.var), collapse = "|"),to))) %>%
-  filter (!(grepl (paste0(c(pain.var, psych.var, phys.var, fx.var), collapse = "|"),from))) 
+  filter (!(grepl (paste0(c(pain.var, psych.var, phys.var, fx.var, outcome.var), collapse = "|"),from))) 
 
   
 bl <- anti_join(pair_var, tiers_keep, by = "rowname")  %>%
@@ -254,7 +392,7 @@ latent1 <- expand.grid(from = "pain",
                         to = pain.var)
 latent2 <- expand.grid(from = "psych",
                         to = psych.var)
-latent3 <- expand.grid(from = "phys",
+latent3 <- expand.grid(from = "physical",
                         to = phys.var)
 latent4 <- expand.grid(from = "funx",
                         to = fx.var)
@@ -267,6 +405,13 @@ wl <- latent1 %>%
 
 ```
 
+```{r}
+writexl::write_xlsx(list (blacklist = bl, 
+                          whitelist = wl), 
+                    "manuscript/sm_black_white_list.xlsx")
+```
+
+
 ### Structural learning
 
 ```{r, eval= FALSE}
@@ -275,7 +420,7 @@ wl <- latent1 %>%
 
 start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn)), df.bn)
 start$pain = list(coef = 0, sd = 1)
-start$phys = list(coef = 0, sd = 1)
+start$physical = list(coef = 0, sd = 1)
 start$psych = list(coef = 0, sd = 1)
 start$funx = list(coef = 0, sd = 1)
 
@@ -289,7 +434,7 @@ m0 <- bnlearn::structural.em(df.bn,
 ####################### subgroup 1 ####################### ##################
 start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn1)), df.bn1)
 start$pain = list(coef = 0, sd = 1)
-start$phys = list(coef = 0, sd = 1)
+start$physical = list(coef = 0, sd = 1)
 start$psych = list(coef = 0, sd = 1)
 start$funx = list(coef = 0, sd = 1)
 
@@ -304,7 +449,7 @@ m1 <- bnlearn::structural.em(df.bn1,
 ####################### subgroup 2 ####################### ##################
 start = bnlearn::bn.fit(bnlearn::empty.graph(names(df.bn2)), df.bn2)
 start$pain = list(coef = 0, sd = 1)
-start$phys = list(coef = 0, sd = 1)
+start$physical = list(coef = 0, sd = 1)
 start$psych = list(coef = 0, sd = 1)
 start$funx = list(coef = 0, sd = 1)
 
@@ -313,6 +458,7 @@ m2 <- bnlearn::structural.em(df.bn2,
                        maximize = "hc",
                        maximize.args = list(blacklist = bl,
                                             whitelist = wl))
+
 
 ## Plot
 
@@ -325,37 +471,59 @@ plot (m2)
 
 ## BN to SEM 
 
+```{r}
+latent_var <- c("age", "odi", "psych", "physical", "funx", "pain", "sex")
+
+edge_2_form <- function (edge, vars2form, otherform) {
+  
+  edge <- as.data.frame(edge)
+  
+  edge <- edge[edge$to %in%vars2form, ] 
+  form_vec <- edge %>%
+    unite ("form", to, from, sep =  "~") %>%
+    pull()
+  
+  paste0 (form_vec,  collapse = "\n")
+  form  = paste0(otherform, paste0 (form_vec,  collapse = "\n"),  collapse = "\n")
+  return (form)
+}
+
+
+```
+
+
 ### Whole cohort
 
 ```{r}
-sem_form0 <- "
-  # latent
-  physical =~ flex_mob + abds_ms + ext_ms
-  pain =~ lbp + legp + duration
-  psych =~ ipq + fabq + ases
-  funx =~ fitness + endure + balance 
-  
-  funx ~ age + psych + pain
-  physical ~ funx + pain
-  pain ~ psych + age
+edge = arcs (m0)
 
-"
+sem_form0 <- edge_2_form(edge = edge,
+            vars2form = latent_var,
+            otherform = cfa_form0)
 
-m0 <- lavaan::sem (sem_form0,  data = df_sem, ordered = c("flex_mob", "duration"))
-fitMeasures(m0, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+m0_sem <- lavaan::sem (sem_form0,  
+                       data = df_sem,
+                       ordered = c("flex_mob", "duration"),
+                       std.lv = FALSE, 
+                       auto.fix.first = TRUE, 
+                       estimator = "WLSMV",
+                       se = "robust.sem")
+fitMeasures(m0_sem, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
 ```
 
 ```{r, echo  = FALSE}
-p1 <- semPaths (m0, 
+p1 <- semPaths (m0_sem, 
           what = "path", 
           layout = "tree3", 
           curvePivot = TRUE, 
           residuals = FALSE,
           intercept = FALSE,
           nCharNodes = 0,
+          thresholds = FALSE,
+          exoCov = FALSE,
           #fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
           rotation = 2,
-          label.cex = 1.5,
+          label.cex = 1,
           curve = TRUE,
           freeStyle = c("black", 1))
 ```
@@ -365,36 +533,44 @@ indicator_order <- c("flex_mob", "abds_ms", "ext_ms",
                      "lbp", "legp", "duration",
                      "ipq", "fabq", "ases",
                      "fitness", "endure", "balance",
-                     "age")
+                     "age", "sex", "odi")
 
 indicator_factor <- c("physical", "physical", "physical",
                      "pain", "pain", "pain",
                      "psych", "psych", "psych",
                      "funx", "funx", "funx",
-                     "age")
+                     "age", "sex", "odi")
 
-factor_layout <- matrix(c(NA,   NA,   "age", NA,  NA,
-                          "funx", NA, NA, NA, "pain",
-                          NA, NA, NA, NA, NA,
-                          "physical", NA, NA, NA, "psych"), byrow = TRUE, 4, 5)
+factor_layout <- matrix(c(NA,  "age", NA,    NA,  NA,
+                          "funx", NA, NA, "pain", NA,
+                          NA, NA, NA, NA, NA, 
+                          NA, "sex", NA, NA, "odi",
+                          NA, NA, NA, NA, NA, 
+                          "physical", NA, NA,  "psych", NA), byrow = TRUE, 6, 5)
 
-factor_point_to <- matrix(c(NA,   NA,   "up", NA,  NA,
-                          "left", NA, NA, NA, "up",
-                          NA, NA, NA, NA, NA,
-                          "down", NA, NA, NA, "right"), byrow = TRUE, 4, 5)
+factor_point_to <- matrix(c(NA,   "left",NA,    NA,  NA,
+                          "left", NA, NA, "up", NA,
+                          NA, NA, NA, NA, NA, 
+                          NA, "left", NA, NA, "left",
+                          NA, NA, NA, NA, NA, 
+                          "left", NA, NA,  "down", NA), byrow = TRUE, 6, 5)
 
 
 indicator_push <- c(funx = 2,
                       physical = 2,
-                      pain = 2,
-                      psych = 2,
-                    age = 0)
-
-indicator_spread <- c(funx = 3,
-                      physical = 3,
                       pain = 3,
                       psych = 3,
-                      age = 0)
+                    age = 0,
+                    sex = 0,
+                    odi = 0)
+
+indicator_spread <- c(funx = 4,
+                      physical = 4,
+                      pain = 3,
+                      psych = 3,
+                      age = 0,
+                      sex = 0,
+                      odi = 0)
 p2 <- set_sem_layout(p1, 
                      indicator_order = indicator_order,
                      indicator_factor = indicator_factor,
@@ -402,83 +578,86 @@ p2 <- set_sem_layout(p1,
                      factor_point_to = factor_point_to,
                      indicator_push = indicator_push,
                      indicator_spread = indicator_spread) %>%
-  mark_sig(object = m0)
+  mark_sig(object = m0_sem) %>%
+  change_node_label(my_label_list)
 plot(p2)
+
+
 ```
 
+
+```{r}
+tiff ("manuscript/fig3.tiff", height = 12, width = 20, units = "in", res = 100)
+plot(p2)
+dev.off ()
+```
+
+```{r}
+
+param_ex <- model_parameters(m0_sem, standardize = TRUE,
+                 component = c("regression", "loading")) %>%
+  rename (DV = To,
+          IV = From,
+          Zval = z,
+          Pval = p) %>%
+  mutate (Component = ifelse (Component == "Loading", "Latent", Component)) %>%
+  mutate (Sig = ifelse (Pval < 0.05, "s", "ns")) %>%
+  select (- c(Operator)) %>%
+  mutate_if(is.numeric, round, 3)
+
+# Export lavaan table
+my_path <- paste0("manuscript/sm_table1", 
+                  ".docx")
+ft <- flextable(param_ex) %>%
+  set_caption(caption = " Table 1.Parameter estimates for whole cohort") %>%
+  autofit() 
+my_doc <- read_docx()  %>% 
+  body_add_flextable(ft)
+print (my_doc, target = my_path)
+```
 
 ### Subgroup 1
 
 ```{r}
-sem_form1 <- "
-  # latent
-  physical =~ flex_mob + abds_ms + ext_ms
-  pain =~ lbp + legp + duration
-  psych =~ ipq + fabq + ases
-  funx =~ fitness + endure + balance 
-  
-  physical ~ age + funx
-  funx ~ age
-  psych ~ funx + pain
-  pain ~ physical
-"
+edge = arcs (m1)
 
-m1 <- lavaan::sem (sem_form1,  data = df_sem1, ordered = c("flex_mob", "duration"))
-summary (m1)
+sem_form1 <- edge_2_form(edge = edge,
+            vars2form = latent_var,
+            otherform = cfa_form0)
 
-fitMeasures(m1, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+m1_sem <- lavaan::sem (sem_form1,
+                       data = df_sem1,
+                       ordered = c("flex_mob", "duration"),
+                       std.lv = FALSE, 
+                       auto.fix.first = TRUE, 
+                       estimator = "WLSMV",
+                       se = "robust.sem")
+summary (m1_sem)
+
+fitMeasures(m1_sem, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
 ```
 
 
 
 ```{r, echo  = FALSE}
-p1 <- semPaths (m1, 
+p1 <- semPaths (m1_sem, 
           what = "path", 
           layout = "tree3", 
-          curvePivot = TRUE, 
+          curvePivot = FALSE, 
           residuals = FALSE,
           intercept = FALSE,
           nCharNodes = 0,
+          thresholds = FALSE,
+          exoCov = FALSE,
           #fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
           rotation = 2,
-          label.cex = 1.5,
+          label.cex = 1,
           curve = TRUE,
           freeStyle = c("black", 1))
 ```
 
 ```{r}
-indicator_order <- c("flex_mob", "abds_ms", "ext_ms",
-                     "lbp", "legp", "duration",
-                     "ipq", "fabq", "ases",
-                     "fitness", "endure", "balance",
-                     "age")
 
-indicator_factor <- c("physical", "physical", "physical",
-                     "pain", "pain", "pain",
-                     "psych", "psych", "psych",
-                     "funx", "funx", "funx",
-                     "age")
-
-factor_layout <- matrix(c(NA,   NA,   "age", NA,  NA,
-                          "funx", NA, NA, NA, "pain",
-                          NA, NA, NA, NA, NA,
-                          "physical", NA, NA, NA, "psych"), byrow = TRUE, 4, 5)
-
-factor_point_to <- matrix(c(NA,   NA,   "up", NA,  NA,
-                          "left", NA, NA, NA, "up",
-                          NA, NA, NA, NA, NA,
-                          "down", NA, NA, NA, "right"), byrow = TRUE, 4, 5)
-
-
-indicator_push <- c(funx = 2,
-                      physical = 2,
-                      pain = 2,
-                      psych = 2)
-
-indicator_spread <- c(funx = 3,
-                      physical = 3,
-                      pain = 3,
-                      psych = 3)
 p2 <- set_sem_layout(p1, 
                      indicator_order = indicator_order,
                      indicator_factor = indicator_factor,
@@ -486,91 +665,112 @@ p2 <- set_sem_layout(p1,
                      factor_point_to = factor_point_to,
                      indicator_push = indicator_push,
                      indicator_spread = indicator_spread) %>%
-  mark_sig(object = m1)
+  mark_sig(object = m1_sem)%>%
+  change_node_label(my_label_list)
 plot(p2)
 ```
 
+```{r}
+tiff ("manuscript/fig4.tiff", height = 12, width = 20, units = "in", res = 100)
+plot(p2)
+dev.off ()
+```
+
+```{r}
+param_ex <- model_parameters(m1_sem, standardize = TRUE,
+                 component = c("regression", "loading")) %>%
+  rename (DV = To,
+          IV = From,
+          Zval = z,
+          Pval = p) %>%
+  mutate (Component = ifelse (Component == "Loading", "Latent", Component)) %>%
+  mutate (Sig = ifelse (Pval < 0.05, "s", "ns")) %>%
+  select (- c(Operator)) %>%
+  mutate_if(is.numeric, round, 3)
+
+# Export lavaan table
+my_path <- paste0("manuscript/sm_table2", 
+                  ".docx")
+ft <- flextable(param_ex) %>%
+  set_caption(caption = " Table 2.Parameter estimates for subgroup 1") %>%
+  autofit() 
+my_doc <- read_docx()  %>% 
+  body_add_flextable(ft)
+print (my_doc, target = my_path)
+```
 
 ### Subgroup 2
 
 ```{r}
-sem_form2 <- "
-  # latent
-  physical =~ flex_mob + abds_ms + ext_ms
-  pain =~ lbp + legp + duration
-  psych =~ ipq + fabq + ases
-  funx =~ fitness + endure + balance 
-  
-  physical ~ age +  funx + pain
-  psych ~ funx
-  pain ~ psych
+edge = arcs (m2)
 
-"
+sem_form2 <- edge_2_form(edge = edge,
+            vars2form = latent_var,
+            otherform = cfa_form0)
 
-m2 <- lavaan::sem (sem_form2,  data = df_sem2, ordered = c("flex_mob", "duration"))
-summary (m2)
+m2_sem <- lavaan::sem (sem_form2,  data = df_sem2, ordered = c("flex_mob", "duration"))
+summary (m2_sem )
 
-fitMeasures(m2, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
+fitMeasures(m2_sem , fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnfi"))
 ```
 
-```{r, echo = FALSE}
-p1 <- semPaths (m2, 
+```{r, echo  = FALSE}
+p1 <- semPaths (m2_sem, 
           what = "path", 
           layout = "tree3", 
-          curvePivot = TRUE, 
+          curvePivot = FALSE, 
           residuals = FALSE,
           intercept = FALSE,
           nCharNodes = 0,
+          thresholds = FALSE,
+          exoCov = FALSE,
           #fixedStyle = c(adjustcolor( "white", alpha.f = 0), 0),
           rotation = 2,
-          label.cex = 1.5,
+          label.cex = 1,
           curve = TRUE,
           freeStyle = c("black", 1))
 ```
 
 ```{r}
 
-indicator_order <- c("flex_mob", "abds_ms", "ext_ms",
-                     "lbp", "legp", "duration",
-                     "ipq", "fabq", "ases",
-                     "fitness", "endure", "balance",
-                     "age")
-
-indicator_factor <- c("physical", "physical", "physical",
-                     "pain", "pain", "pain",
-                     "psych", "psych", "psych",
-                     "funx", "funx", "funx",
-                     "age")
-
-factor_layout <- matrix(c(NA,   NA,   "age", NA,  NA,
-                          "funx", NA, NA, NA, "pain",
-                          NA, NA, NA, NA, NA,
-                          "physical", NA, NA, NA, "psych"), byrow = TRUE, 4, 5)
-
-factor_point_to <- matrix(c(NA,   NA,   "up", NA,  NA,
-                          "left", NA, NA, NA, "up",
-                          NA, NA, NA, NA, NA,
-                          "down", NA, NA, NA, "right"), byrow = TRUE, 4, 5)
-
-
-indicator_push <- c(funx = 2,
-                      physical = 2,
-                      pain = 2,
-                      psych = 2)
-
-indicator_spread <- c(funx = 3,
-                      physical = 3,
-                      pain = 3,
-                      psych = 3)
 p2 <- set_sem_layout(p1, 
                      indicator_order = indicator_order,
                      indicator_factor = indicator_factor,
                      factor_layout = factor_layout,
                      factor_point_to = factor_point_to,
                      indicator_push = indicator_push,
-                     indicator_spread = indicator_spread)%>%
-  mark_sig(object = m2)
+                     indicator_spread = indicator_spread) %>%
+  mark_sig(object = m2_sem)%>%
+  change_node_label(my_label_list)
 plot(p2)
+```
+
+```{r}
+tiff ("manuscript/fig5.tiff", height = 12, width = 20, units = "in", res = 100)
+plot(p2)
+dev.off ()
+```
+
+```{r}
+param_ex <- model_parameters(m2_sem, standardize = TRUE,
+                 component = c("regression", "loading")) %>%
+  rename (DV = To,
+          IV = From,
+          Zval = z,
+          Pval = p) %>%
+  mutate (Component = ifelse (Component == "Loading", "Latent", Component)) %>%
+  mutate (Sig = ifelse (Pval < 0.05, "s", "ns")) %>%
+  select (- c(Operator)) %>%
+  mutate_if(is.numeric, round, 3)
+# Export lavaan table
+my_path <- paste0("manuscript/sm_table3", 
+                  ".docx")
+ft <- flextable(param_ex) %>%
+  set_caption(caption = " Table 3.Parameter estimates for subgroup 2") %>%
+  autofit() 
+my_doc <- read_docx()  %>% 
+  body_add_flextable(ft)
+print (my_doc, target = my_path)
 ```
 
 
@@ -580,8 +780,12 @@ plot(p2)
 res <- list (m0 = m0,
              m1 = m1,
              m2 = m2,
+             m0_sem = m0_sem,
+             m1_sem  = m1_sem,
+             m2_sem  = m2_sem,
              df = df,
              df_grp = df_grp,
+             df_sem = df_sem,
              df_sem1 = df_sem1,
              df_sem2 = df_sem2,
              df.bn = df.bn,

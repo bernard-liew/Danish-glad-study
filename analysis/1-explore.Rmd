@@ -109,25 +109,46 @@ skim (df_base)
 df_base %>%
   map (n_distinct)
 
-df_base <- df_base %>%
+df_base2 <- df_base %>%
+  mutate (flex_mob = case_when(
+    flex_mob == 4 ~ 1,
+    flex_mob == 2 ~ 2,
+    flex_mob == 1 ~ 3,
+    flex_mob == 3 ~ 4,
+    flex_mob == 0 ~ 0)) %>%
+  mutate (flex_mob = ifelse (flex_mob == 0, NA, flex_mob)) %>%
   mutate (flex_mob = factor (flex_mob),
           duration = factor (duration),
           trajec = factor (trajec),
-          sbt = factor (sbt)) %>%
-  mutate_at (vars(fitness:freedom), factor)
+          sbt = factor (sbt),
+          sex = factor (sex)) %>%
+  mutate_at (vars(fitness:freedom), factor) %>%
+  select (-c(bmi, trajec, sbt))
 
-df_base %>%
-  map_if (is.factor, table)
+df_base2 %>%
+  map (n_distinct)
+
 ```
 
 ## Impute missing
 
 ```{r}
-df_base_imp <-mice (df_base, m = 5, maxit = 30, method = "rf")
+
+tiff ("manuscript/sm_fig1.tiff", height = 4, width = 6, units = "in", res = 100)
+plot_missing (df_base2) +
+  theme_cowplot() + 
+  xlab ("Number of missing rows") + 
+  ylab ("Variables")
+dev.off ()
+```
+
+
+```{r}
+df_base_imp <-mice (df_base2, m = 5, maxit = 30, method = "rf")
 
 #df_base_imp <- complete (df_base_imp)
 
-df_com <- list (raw = df_base,
+df_com <- list (raw = df_base2,
                 imp = df_base_imp)
 ```
 
