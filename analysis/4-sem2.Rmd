@@ -24,7 +24,7 @@ library (arsenal)
 library (rstatix)
 library (kableExtra)
 library (gtsummary)
-
+library (ggdendro)
 # BN
 library (bnlearn)
 library (Rgraphviz)
@@ -121,7 +121,7 @@ f <- ggplot(ggd1, horiz = FALSE, labels = FALSE) +
   ylab ("Gower's distance")
 
 
-tiff ("manuscript/fig1.tiff", height = 8, width = 12, units = "in", res = 100)
+tiff ("manuscript/fig2.tiff", height = 8, width = 12, units = "in", res = 100)
 ggdendro::ggdendrogram(res.hc, 
                        labels = FALSE, 
                        leaf_labels = FALSE) + 
@@ -289,7 +289,7 @@ f <- semPaths (cfa0,
           thresholds = FALSE,
           intercepts = FALSE)
 f2 <- change_node_label(f, my_label_list)
-tiff ("manuscript/fig2.tiff", height = 8, width = 12, units = "in", res = 100)
+tiff ("manuscript/fig3.tiff", height = 8, width = 12, units = "in", res = 100)
 plot (f2)
 dev.off ()
 ```
@@ -587,7 +587,7 @@ plot(p2)
 
 
 ```{r}
-tiff ("manuscript/fig3.tiff", height = 12, width = 20, units = "in", res = 100)
+tiff ("manuscript/fig4.tiff", height = 12, width = 20, units = "in", res = 100)
 plot(p2)
 dev.off ()
 ```
@@ -671,7 +671,7 @@ plot(p2)
 ```
 
 ```{r}
-tiff ("manuscript/fig4.tiff", height = 12, width = 20, units = "in", res = 100)
+tiff ("manuscript/fig5.tiff", height = 12, width = 20, units = "in", res = 100)
 plot(p2)
 dev.off ()
 ```
@@ -746,7 +746,7 @@ plot(p2)
 ```
 
 ```{r}
-tiff ("manuscript/fig5.tiff", height = 12, width = 20, units = "in", res = 100)
+tiff ("manuscript/fig6.tiff", height = 12, width = 20, units = "in", res = 100)
 plot(p2)
 dev.off ()
 ```
