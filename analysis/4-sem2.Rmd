@@ -54,7 +54,7 @@ list2env(res,globalenv())
 
 This is an imputed dataset
 
-```{r, eval = FALSE}
+```{r}
 
 df_base <- readRDS("output/df_base.RDS")
 
@@ -100,7 +100,7 @@ res.hc <- fastcluster::hclust(d = dd, method = "complete")
 
 ## Validate
 
-```{r}
+```{r, eval = FALSE}
 plot (res.hc)
 
 dd_mat <- as.matrix(dd)
@@ -110,7 +110,7 @@ intern <- clValid(dd_mat, 2:6, clMethods=c("hierarchical"), method = "complete",
 
 ## Plot
 
-```{r}
+```{r, eval = FALSE}
 dend <- res.hc %>%
   as.dendrogram %>%
   set("branches_k_color", k = 2) %>% set("branches_lwd", 0.7) %>%
@@ -190,17 +190,17 @@ colnames (tab2) <- c ("Variables",
 tab2$`Group 1` <- unlist(tab2$`Group 1`)
 tab2$`Group 2` <- unlist(tab2$`Group 2`)
 tab2$`Total` <- unlist(tab2$`Total`)
-my_path <- paste0("manuscript/table_1",
-                  ".docx")
-
-ft <- flextable(tab2) %>%
-  set_caption(caption = " Table 1.Baseline descriptive characteristics of cohort") %>%
-  autofit()
-
-my_doc <- read_docx()  %>%
-  body_add_flextable(ft)
-
-print (my_doc, target = my_path)
+# my_path <- paste0("manuscript/table_1",
+#                   ".docx")
+# 
+# ft <- flextable(tab2) %>%
+#   set_caption(caption = " Table 1.Baseline descriptive characteristics of cohort") %>%
+#   autofit()
+# 
+# my_doc <- read_docx()  %>%
+#   body_add_flextable(ft)
+# 
+# print (my_doc, target = my_path)
 ```
 
 ```{r}
@@ -276,7 +276,7 @@ fitMeasures(cfa0, fit.measures = c("rmsea", "pvalue", "cfi", "tli", "srmr", "nnf
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 my_label_list <- list(list(node = "funx", to = "activity"))
 f <- semPaths (cfa0, 
           what = "paths",
@@ -405,7 +405,7 @@ wl <- latent1 %>%
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 writexl::write_xlsx(list (blacklist = bl, 
                           whitelist = wl), 
                     "manuscript/sm_black_white_list.xlsx")
@@ -529,6 +529,9 @@ p1 <- semPaths (m0_sem,
 ```
 
 ```{r}
+my_label_list <- list(list(node = "funx", to = "activity"),
+                      list (node = "sex", to = "gender"))
+
 indicator_order <- c("flex_mob", "abds_ms", "ext_ms",
                      "lbp", "legp", "duration",
                      "ipq", "fabq", "ases",
@@ -586,13 +589,13 @@ plot(p2)
 ```
 
 
-```{r}
-tiff ("manuscript/fig4.tiff", height = 12, width = 20, units = "in", res = 100)
+```{r, eval = FALSE}
+tiff ("manuscript/fig3.tiff", height = 12, width = 20, units = "in", res = 100)
 plot(p2)
 dev.off ()
 ```
 
-```{r}
+```{r, eval = FALSE}
 
 param_ex <- model_parameters(m0_sem, standardize = TRUE,
                  component = c("regression", "loading")) %>%
@@ -618,7 +621,7 @@ print (my_doc, target = my_path)
 
 ### Subgroup 1
 
-```{r}
+```{r, eval = FALSE}
 edge = arcs (m1)
 
 sem_form1 <- edge_2_form(edge = edge,
@@ -670,13 +673,13 @@ p2 <- set_sem_layout(p1,
 plot(p2)
 ```
 
-```{r}
-tiff ("manuscript/fig5.tiff", height = 12, width = 20, units = "in", res = 100)
+```{r, eval = FALSE}
+tiff ("manuscript/fig4.tiff", height = 12, width = 20, units = "in", res = 100)
 plot(p2)
 dev.off ()
 ```
 
-```{r}
+```{r, eval = FALSE}
 param_ex <- model_parameters(m1_sem, standardize = TRUE,
                  component = c("regression", "loading")) %>%
   rename (DV = To,
@@ -701,7 +704,7 @@ print (my_doc, target = my_path)
 
 ### Subgroup 2
 
-```{r}
+```{r, eval = FALSE}
 edge = arcs (m2)
 
 sem_form2 <- edge_2_form(edge = edge,
@@ -731,7 +734,7 @@ p1 <- semPaths (m2_sem,
           freeStyle = c("black", 1))
 ```
 
-```{r}
+```{r, eval = FALSE}
 
 p2 <- set_sem_layout(p1, 
                      indicator_order = indicator_order,
@@ -745,13 +748,13 @@ p2 <- set_sem_layout(p1,
 plot(p2)
 ```
 
-```{r}
-tiff ("manuscript/fig6.tiff", height = 12, width = 20, units = "in", res = 100)
+```{r, eval = FALSE}
+tiff ("manuscript/fig5.tiff", height = 12, width = 20, units = "in", res = 100)
 plot(p2)
 dev.off ()
 ```
 
-```{r}
+```{r, eval = FALSE}
 param_ex <- model_parameters(m2_sem, standardize = TRUE,
                  component = c("regression", "loading")) %>%
   rename (DV = To,
